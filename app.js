@@ -3,6 +3,7 @@ const mysql = require('mysql2');
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
+require('dotenv').config(); // Load environment variables from .env
 
 const app = express();
 
@@ -17,17 +18,17 @@ app.set('view engine', 'ejs');
 
 // Set up session
 app.use(session({
-    secret: 'your_secret_key', // Change this to a more secure key in production
+    secret: process.env.SESSION_SECRET, // Use session secret from .env
     resave: false,
     saveUninitialized: true,
 }));
 
-// Set up MySQL connection
+// Set up MySQL connection using environment variables
 const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'bill',
-    password: '@bill123',
-    database: 'vaccination_tracker'
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
 });
 
 // Connect to the MySQL database
@@ -136,6 +137,7 @@ app.get('/dashboard', checkAuth, (req, res) => {
         res.render('dashboard', { individuals: results });
     });
 });
+
 // POST: Logout route
 app.post('/logout', (req, res) => {
     req.session.destroy(err => {
@@ -145,7 +147,6 @@ app.post('/logout', (req, res) => {
         res.redirect('/'); // Redirect to home after logout
     });
 });
-
 
 // Start the server
 app.listen(3000, () => {
