@@ -1,5 +1,5 @@
 const express = require('express');
-const mysql = require('mysql2');
+const { Pool } = require('pg'); // Import the pg module for PostgreSQL
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
@@ -23,21 +23,16 @@ app.use(session({
     saveUninitialized: true,
 }));
 
-// Set up MySQL connection using environment variables
-const db = mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-});
-
-// Connect to the MySQL database
-db.connect((err) => {
-    if (err) {
-        console.error('Error connecting to the database: ' + err.stack);
-        return;
-    }
-    console.log('Connected to the MySQL database.');
+// Set up PostgreSQL connection using environment variables
+const pool = new Pool({
+    host: process.env.PGHOST,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    database: process.env.PGDATABASE,
+    port: process.env.PGPORT,
+    ssl: {
+        rejectUnauthorized: false, // This is often required for cloud databases
+    },
 });
 
 // Middleware for checking authentication
@@ -54,29 +49,29 @@ app.get('/', (req, res) => {
 });
 
 // GET: Home route to display all individuals
-app.get('/home', (req, res) => {
-    const sql = 'SELECT * FROM individuals';
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Error fetching individuals: ', err);
-            return res.status(500).send('Server error');
-        }
-        res.render('home', { individuals: results }); // Ensure home.ejs exists
-    });
+app.get('/home', async (req, res) => {
+    try {
+        const sql = 'SELECT * FROM individuals';
+        const { rows } = await pool.query(sql); // Use async/await for PostgreSQL
+        res.render('home', { individuals: rows }); // Ensure home.ejs exists
+    } catch (err) {
+        console.error('Error fetching individuals: ', err);
+        return res.status(500).send('Server error');
+    }
 });
 
 // POST: Route to add a new individual
-app.post('/add', (req, res) => {
+app.post('/add', async (req, res) => {
     const { name, vaccine_type, vaccination_date, status } = req.body;
-    const sql = 'INSERT INTO individuals (name, vaccine_type, vaccination_date, status) VALUES (?, ?, ?, ?)';
-    db.query(sql, [name, vaccine_type, vaccination_date, status], (err, result) => {
-        if (err) {
-            console.error('Error adding individual: ', err);
-            return res.status(500).send('Server error');
-        }
-        console.log('Individual added:', result);
+    const sql = 'INSERT INTO individuals (name, vaccine_type, vaccination_date, status) VALUES ($1, $2, $3, $4) RETURNING *';
+    try {
+        const { rows } = await pool.query(sql, [name, vaccine_type, vaccination_date, status]); // Use async/await for PostgreSQL
+        console.log('Individual added:', rows[0]);
         res.redirect('/home'); // Redirect to home after adding an individual
-    });
+    } catch (err) {
+        console.error('Error adding individual: ', err);
+        return res.status(500).send('Server error');
+    }
 });
 
 // GET: Register route
@@ -85,17 +80,17 @@ app.get('/register', (req, res) => {
 });
 
 // POST: Register new user
-app.post('/register', (req, res) => {
+app.post('/register', async (req, res) => {
     const { username, password } = req.body;
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const sql = 'INSERT INTO users (username, password) VALUES (?, ?)';
-    db.query(sql, [username, hashedPassword], (err, result) => {
-        if (err) {
-            console.error('Error registering user: ', err);
-            return res.status(500).send('Server error');
-        }
+    const sql = 'INSERT INTO users (username, password) VALUES ($1, $2)';
+    try {
+        await pool.query(sql, [username, hashedPassword]);
         res.redirect('/login');
-    });
+    } catch (err) {
+        console.error('Error registering user: ', err);
+        return res.status(500).send('Server error');
+    }
 });
 
 // GET: Login route
@@ -104,16 +99,13 @@ app.get('/login', (req, res) => {
 });
 
 // POST: Login user
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
     const { username, password } = req.body;
-    const sql = 'SELECT * FROM users WHERE username = ?';
-    db.query(sql, [username], (err, results) => {
-        if (err) {
-            console.error('Error during login: ', err);
-            return res.status(500).send('Server error');
-        }
-        if (results.length > 0) {
-            const user = results[0];
+    const sql = 'SELECT * FROM users WHERE username = $1';
+    try {
+        const { rows } = await pool.query(sql, [username]);
+        if (rows.length > 0) {
+            const user = rows[0];
             if (bcrypt.compareSync(password, user.password)) {
                 req.session.userId = user.id; // Store user ID in session
                 res.redirect('/dashboard');
@@ -123,19 +115,22 @@ app.post('/login', (req, res) => {
         } else {
             res.send('User not found');
         }
-    });
+    } catch (err) {
+        console.error('Error during login: ', err);
+        return res.status(500).send('Server error');
+    }
 });
 
 // GET: Dashboard route
-app.get('/dashboard', checkAuth, (req, res) => {
-    const sql = 'SELECT * FROM individuals';
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Error fetching dashboard data: ', err);
-            return res.status(500).send('Server error');
-        }
-        res.render('dashboard', { individuals: results });
-    });
+app.get('/dashboard', checkAuth, async (req, res) => {
+    try {
+        const sql = 'SELECT * FROM individuals';
+        const { rows } = await pool.query(sql); // Use async/await for PostgreSQL
+        res.render('dashboard', { individuals: rows });
+    } catch (err) {
+        console.error('Error fetching dashboard data: ', err);
+        return res.status(500).send('Server error');
+    }
 });
 
 // POST: Logout route
@@ -149,11 +144,7 @@ app.post('/logout', (req, res) => {
 });
 
 // Start the server
-//app.listen(3000, () => {
-//console.log('Server running at http://localhost:3000');
-//});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
-
